@@ -3,6 +3,7 @@ package git.artdeell.dnbootstrap.input;
 import android.content.Context;
 import android.graphics.Rect;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -20,13 +21,16 @@ import git.artdeell.dnbootstrap.input.model.InputConfiguration;
 import git.artdeell.dnbootstrap.input.model.VisibilityConfiguration;
 
 public class ControlLayout extends LoadableButtonLayout implements GrabListener {
+    private static final int TOUCH_SLOP_DP = 8;
     private final Rect hitTestRect = new Rect();
+    private final int touchSlopPx;
     private final HashMap<Integer, HitTarget> lastHitTargets = new HashMap<>();
     private final Set<HitTarget> allHitTargets = new HashSet<>();
     private final HitTarget defaultHitTarget = new HitTarget(new DefaultConsumer());
 
     public ControlLayout(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
+        touchSlopPx = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TOUCH_SLOP_DP, getResources().getDisplayMetrics());
         GLFW.addGrabListener(this);
     }
 
@@ -95,25 +99,24 @@ public class ControlLayout extends LoadableButtonLayout implements GrabListener 
         float x = event.getX(pointer), y = event.getY(pointer);
 
         if(action == MotionEvent.ACTION_MOVE) {
-            // If the current pointer is taken over by a sticky view, just update its position
-            // and leave
-            if(lastHit != null && lastHit.consumer.getInputConfiguration().sticky) {
+            if(lastHit == null) return;
+
+            // Keep the original target for the pointer during a drag. This prevents a swipe
+            // over a button from stealing the gesture or triggering a button press.
+            if(lastHit.consumer.getInputConfiguration().sticky) {
                 lastHit.onTouchPosition(pointerId, x - lastHit.consumer.getLeft(), y - lastHit.consumer.getTop());
                 return;
             }
-            HitTarget newHit = hitTest((int)x, (int)y);
 
-            if(lastHit != newHit) {
-                if(lastHit != null) lastHit.onTouchState(pointerId,false);
-                if(newHit != null) newHit.onTouchState(pointerId, true);
-            }
-            if(newHit != null) newHit.onTouchPosition(pointerId, x, y);
-            lastHitTargets.put(pointerId, newHit);
+            lastHit.onTouchPosition(pointerId, x, y);
         }else if(action == MotionEvent.ACTION_POINTER_UP) {
             if(lastHit != null) lastHit.onTouchState(pointerId, false);
             lastHitTargets.remove(pointerId);
         }else if(action == MotionEvent.ACTION_POINTER_DOWN) {
             HitTarget hit = hitTest((int) x, (int) y);
+            if(hit != null && hit.consumer.getInputConfiguration().movesCursor) {
+                hit = defaultHitTarget;
+            }
             if(hit != null) hit.onTouchState(pointerId, true);
             lastHitTargets.put(pointerId, hit);
         }
@@ -177,6 +180,9 @@ public class ControlLayout extends LoadableButtonLayout implements GrabListener 
         public final @NonNull LayoutTouchConsumer consumer;
         private int firstTouchedPointer;
         private boolean lastState;
+        private float initialX = Float.NaN;
+        private float initialY = Float.NaN;
+        private boolean dragStarted;
 
         private HitTarget(@NonNull LayoutTouchConsumer consumer) {
             this.consumer = consumer;
@@ -184,8 +190,21 @@ public class ControlLayout extends LoadableButtonLayout implements GrabListener 
 
         public void onTouchState(int pointerId, boolean isTouched) {
             if(pointerId != firstTouchedPointer && firstTouchedPointer != -1) return;
-            if(!isTouched) firstTouchedPointer = -1;
-            if(isTouched && firstTouchedPointer == -1) firstTouchedPointer = pointerId;
+            if(isTouched && firstTouchedPointer == -1) {
+                firstTouchedPointer = pointerId;
+                dragStarted = false;
+                initialX = Float.NaN;
+                initialY = Float.NaN;
+            }
+            if(!isTouched) {
+                firstTouchedPointer = -1;
+                if(lastState) consumer.onTouchState(false);
+                lastState = false;
+                dragStarted = false;
+                initialX = Float.NaN;
+                initialY = Float.NaN;
+                return;
+            }
             if(isTouched != lastState) {
                 lastState = isTouched;
                 consumer.onTouchState(isTouched);
@@ -194,6 +213,17 @@ public class ControlLayout extends LoadableButtonLayout implements GrabListener 
 
         public void onTouchPosition(int pointerId, float x, float y) {
             if(pointerId != firstTouchedPointer) return;
+            if(Float.isNaN(initialX) || Float.isNaN(initialY)) {
+                initialX = x;
+                initialY = y;
+            }
+            if(!dragStarted && (Math.abs(x - initialX) > touchSlopPx || Math.abs(y - initialY) > touchSlopPx)) {
+                dragStarted = true;
+                if(lastState) {
+                    lastState = false;
+                    consumer.onTouchState(false);
+                }
+            }
             consumer.onTouchPosition(x - consumer.getLeft(), y - consumer.getTop());
         }
 
@@ -201,6 +231,9 @@ public class ControlLayout extends LoadableButtonLayout implements GrabListener 
             firstTouchedPointer = -1;
             if(lastState) consumer.onTouchState(false);
             lastState = false;
+            dragStarted = false;
+            initialX = Float.NaN;
+            initialY = Float.NaN;
         }
     }
 
