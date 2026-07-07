@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ "master", "mtf" ]
+    branches: [ "master", "mtf", "t1" ]
   pull_request:
     branches: [ "master", "mtf" ]
 
